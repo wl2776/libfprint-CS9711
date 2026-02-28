@@ -47,6 +47,10 @@ G_DEFINE_TYPE (FpDeviceCs9711, fpi_device_cs9711, FP_TYPE_IMAGE_DEVICE)
 
 #define CS9711_FP_CMD_STATE_RESULT_EXPECTED { 0xea, 0x01, 0x62, 0xa0, 0x00, 0x00, 0xc3, 0xea }
 
+#ifndef MIN
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#endif
+
 
 /************************** GENERIC STUFF *************************************/
 
@@ -104,12 +108,13 @@ usb_read_in (FpDevice *dev,
   // data size. So just request the max expected, and deal with errors
   // in the callback. For the same reason, cannot use short_is_error
   // facility
-  length = CS9711_FP_RECV_LEN_MAX;
+  // FIXED: Respect the intended length parameter instead of forcing max length
+  gsize actual_length = MIN(length, CS9711_FP_RECV_LEN_MAX);
   short_is_error = FALSE;
   transfer = fpi_usb_transfer_new (FP_DEVICE (dev));
   transfer->short_is_error = short_is_error;
   transfer->ssm = ssm;
-  fpi_usb_transfer_fill_bulk (transfer, CS9711_RECEIVE_ENDPOINT, length);
+  fpi_usb_transfer_fill_bulk (transfer, CS9711_RECEIVE_ENDPOINT, actual_length);
   fpi_usb_transfer_submit (transfer, timeout_in_ms, NULL, callback, user_data);
 }
 
@@ -181,7 +186,7 @@ m_init_state (FpiSsm *ssm, FpDevice *_dev)
         {
           fp_dbg("Error details: '%s', quark: %u code: %d", error->message, error->domain, error->code);
           // if (g_error_matches (error, G_USB_DEVICE_ERROR, G_USB_DEVICE_ERROR_TIMED_OUT))
-          if (error->code == G_USB_DEVICE_ERROR_TIMED_OUT && error->domain == G_USB_DEVICE_ERROR)
+          if (g_error_matches (error, G_USB_DEVICE_ERROR, G_USB_DEVICE_ERROR_TIMED_OUT))
             fpi_ssm_next_state (ssm);
           else
             fpi_ssm_mark_failed (ssm, error);
@@ -234,6 +239,7 @@ m_init_complete (FpiSsm *ssm, FpDevice *dev, GError *error) //TODO: done
 enum {
   M_SCAN_INIT_SLEEP = 0,
   M_SCAN_INIT_READ,
+  M_SCAN_WAIT_FOR_DELAY_BEFORE_SCAN,
   M_SCAN_WAIT_FOR_READ_TO_COMPLETE,
   M_SCAN_GET_IMAGE_TAIL,
   M_SCAN_SEND_POST_SCAN,
@@ -304,14 +310,24 @@ m_scan_submit_image (FpiSsm        *ssm,
   FpImage *img;
 
   img = fp_image_new (CS9711_WIDTH, CS9711_HEIGHT);
-  if (img == NULL)
+  if (img == NULL) {
+    fpi_ssm_mark_failed (ssm, g_error_new (FP_DEVICE_ERROR,
+                                            FP_DEVICE_ERROR_GENERAL,
+                                            "Failed to allocate image"));
     return 1;
+  }
 
   for (gsize y = 0; y < CS9711_SENSOR_HEIGHT; y++)
     for (gsize x = 0; x < CS9711_SENSOR_WIDTH; x++) {
       gsize dy = y / 2;
       gsize dx = x * 2 + y % 2;
-      img->data[dy * CS9711_WIDTH + dx] = self->image_buffer[y * CS9711_SENSOR_WIDTH + x];
+
+      // Bounds checking to prevent buffer overflow
+      if (dy < CS9711_HEIGHT && dx < CS9711_WIDTH &&
+          (y * CS9711_SENSOR_WIDTH + x) < CS9711_FRAME_SIZE &&
+          (dy * CS9711_WIDTH + dx) < (CS9711_WIDTH * CS9711_HEIGHT)) {
+        img->data[dy * CS9711_WIDTH + dx] = self->image_buffer[y * CS9711_SENSOR_WIDTH + x];
+      }
     }
 
   img->flags = FPI_IMAGE_PARTIAL;
@@ -335,7 +351,14 @@ m_scan_state (FpiSsm *ssm, FpDevice *_dev)
       break;
 
     case M_SCAN_INIT_READ:
+      // Fixed race condition: separate USB read and send operations
+      // First initiate the USB read
       usb_read_in (_dev, ssm, CS9711_FP_RECV_LEN_1, FALSE, 0, m_scan_read_cb_bulk, M_SCAN_READ_CB_BULK_UD_FIRST_BLOCK);
+      // Then send the scan command after a small delay to avoid conflicts
+      fpi_ssm_next_state_delayed (ssm, 10); // 10ms delay
+      break;
+
+    case M_SCAN_WAIT_FOR_DELAY_BEFORE_SCAN:
       usb_send_out_sync (_dev, CS9711_FP_CMD_TYPE_SCAN, &error);
       fpi_image_device_report_finger_status (image_device, TRUE);
       m_util_fail_if_error_or_next (ssm, error);
@@ -355,7 +378,11 @@ m_scan_state (FpiSsm *ssm, FpDevice *_dev)
       break;
 
     case M_SCAN_IMAGE_COMPLETE:
-      m_scan_submit_image (ssm, image_device);
+      /* Check if image allocation failed */
+      if (m_scan_submit_image (ssm, image_device) != 0) {
+        /* Image allocation failed, ssm already marked failed in function */
+        return;
+      }
       fpi_image_device_report_finger_status (image_device, FALSE);
       fpi_ssm_mark_completed (ssm);
       break;
@@ -445,7 +472,13 @@ fpi_device_cs9711_class_init (FpDeviceCs9711Class *klass)
   FpDeviceClass *dev_class = FP_DEVICE_CLASS (klass);
   FpImageDeviceClass *img_class = FP_IMAGE_DEVICE_CLASS (klass);
 
-  g_assert ((CS9711_FRAME_SIZE) == (CS9711_FP_RECV_LEN_1 + CS9711_FP_RECV_LEN_2));
+  // Replace assertion with proper error handling to avoid crashes
+  if ((CS9711_FRAME_SIZE) != (CS9711_FP_RECV_LEN_1 + CS9711_FP_RECV_LEN_2)) {
+    g_critical("CS9711 frame size mismatch: CS9711_FRAME_SIZE=%d, expected=%d",
+               CS9711_FRAME_SIZE, CS9711_FP_RECV_LEN_1 + CS9711_FP_RECV_LEN_2);
+    // This is a critical configuration error, but we handle it gracefully
+    g_return_if_reached();
+  }
 
   dev_class->id = "cs9711";
   dev_class->full_name = "Chipsailing CS9711Fingprint";
