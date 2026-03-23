@@ -410,3 +410,14 @@ if valgrind.found() and libfprint_sanitizers.length() == 0
             'LIBFPRINT_TEST_WRAPPER=' + ' '.join(libfprint_wrapper),
         ])
 endif
+
+# Evaluation binary
+inc_dir = include_directories('../libfprint')
+
+eval_exec = executable('eval_sigfm_1_n',
+    'eval_sigfm_1_n.cpp',
+    link_with: libsigfm,
+    dependencies: [opencv, glib_dep],
+    include_directories: inc_dir,
+    install: false
+)
