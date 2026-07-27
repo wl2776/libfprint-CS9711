@@ -139,6 +139,20 @@ int match_score(const SigfmImgInfo* probe, const SigfmImgInfo* candidate)
             (uint16_t)std::lround(ck.pt.x), (uint16_t)std::lround(ck.pt.y), 0);
     }
 
+    auto deduplicate = [](std::vector<OpenAFIS::Minutia>& minu) {
+        std::sort(minu.begin(), minu.end(),
+            [](const OpenAFIS::Minutia& a, const OpenAFIS::Minutia& b) {
+                if (a.x() != b.x()) return a.x() < b.x();
+                return a.y() < b.y();
+            });
+        minu.erase(std::unique(minu.begin(), minu.end(),
+            [](const OpenAFIS::Minutia& a, const OpenAFIS::Minutia& b) {
+                return a.x() == b.x() && a.y() == b.y();
+            }), minu.end());
+    };
+    deduplicate(probe_minu);
+    deduplicate(candidate_minu);
+
     auto probe_fp = build_fingerprint_from_minutiae(probe_minu, probe->width, probe->height);
     auto candidate_fp = build_fingerprint_from_minutiae(candidate_minu, candidate->width, candidate->height);
 
