@@ -357,6 +357,7 @@ int main(int argc, char* argv[]) {
     for (auto& fut : futures) {
         auto batch = fut.get();  // Блокируется до завершения
         matches.insert(matches.end(), batch.begin(), batch.end());
+        std::cout << "Processed " << matches.size() << "\n";
     }
 
     // Write CSV
