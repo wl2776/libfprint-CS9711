@@ -71,19 +71,6 @@ OpenAFIS::Fingerprint build_fingerprint_from_minutiae(
     return t.fingerprint();
 }
 
-static std::vector<cv::KeyPoint> filter_by_response(
-    const std::vector<cv::KeyPoint>& kps, int max_count)
-{
-    std::vector<cv::KeyPoint> sorted(kps.begin(), kps.end());
-    std::sort(sorted.begin(), sorted.end(),
-        [](const cv::KeyPoint& a, const cv::KeyPoint& b) {
-            return a.response > b.response;
-        });
-    if ((int)sorted.size() > max_count)
-        sorted.resize((size_t)max_count);
-    return sorted;
-}
-
 } // namespace
 
 int match_score(const SigfmImgInfo* probe, const SigfmImgInfo* candidate)
