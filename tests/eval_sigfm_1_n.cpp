@@ -123,7 +123,8 @@ struct FeatureData {
 };
 
 std::vector<fs::path> get_image_files(const fs::path& dir);
-std::string extract_user_finger(const fs::path& p);
+int extract_finger_id(const fs::path& p);
+std::string extract_impression_key(const fs::path& p);
 
 // === Utility Functions ===
 std::vector<fs::path> get_image_files(const fs::path& dir) {
@@ -141,8 +142,14 @@ std::vector<fs::path> get_image_files(const fs::path& dir) {
     return files;
 }
 
-std::string extract_user_finger(const fs::path& p) {
-    return p.stem().string();  // Use full stem as user+finger ID
+int extract_finger_id(const fs::path& p) {
+    std::string stem = p.stem().string(); // e.g. "101_1"
+    auto pos = stem.find('_');
+    return std::stoi(stem.substr(0, pos));
+}
+
+std::string extract_impression_key(const fs::path& p) {
+    return p.stem().string(); // e.g. "101_1" — unique per file
 }
 
 // === Main Evaluation Logic ===
@@ -236,9 +243,12 @@ int main(int argc, char* argv[]) {
     auto files = get_image_files(input_dir);
     std::shuffle(files.begin(), files.end(), gen);
 
-    // Maps: user -> list of enrolled templates
-    std::map<std::string, std::vector<FeatureData>> enrolls;
-    std::map<std::pair<std::string, int>, FeatureData> probes;  // (user, idx)
+    // Maps: finger_id -> list of enrolled templates
+    std::map<int, std::vector<FeatureData>> enrolls;
+    // (impression_key, crop_idx) -> FeatureData  (impression_key is file stem e.g. "101_1")
+    std::map<std::pair<std::string, int>, FeatureData> probes;
+    // (impression_key, crop_idx) -> finger_id for genuine check
+    std::map<std::pair<std::string, int>, int> probe_finger;
 
     std::cout << "Extracting features...\n";
 
@@ -246,24 +256,25 @@ int main(int argc, char* argv[]) {
         cv::Mat image = cv::imread(f.string(), cv::IMREAD_GRAYSCALE);
         if (image.empty()) continue;
 
-        std::string user_finger = extract_user_finger(f);
+        int finger_id = extract_finger_id(f);
+        std::string imp_key = extract_impression_key(f);
 
         if (num_crops == 0) {
-            // Full image
             auto* info = sigfm_extract(image.data, image.cols, image.rows);
             if (info) {
-                probes[{user_finger, 0}] = FeatureData{info};
-                enrolls[user_finger].push_back(FeatureData{info});
+                probes[{imp_key, 0}] = FeatureData{info};
+                probe_finger[{imp_key, 0}] = finger_id;
+                enrolls[finger_id].push_back(FeatureData{info});
                 sigfm_free_info(info);
             }
         } else {
-            // Crop-based
             for (int i = 0; i < num_crops; ++i) {
                 cv::Mat crop = simulator->simulate(image);
                 if (!crop.empty()) {
                     auto* info = sigfm_extract(crop.data, crop.cols, crop.rows);
                     if (info) {
-                        probes[{user_finger, i}] = FeatureData{info};
+                        probes[{imp_key, i}] = FeatureData{info};
+                        probe_finger[{imp_key, i}] = finger_id;
                         sigfm_free_info(info);
                     }
                 }
@@ -273,7 +284,7 @@ int main(int argc, char* argv[]) {
                 if (!crop.empty()) {
                     auto* info = sigfm_extract(crop.data, crop.cols, crop.rows);
                     if (info) {
-                        enrolls[user_finger].push_back(FeatureData{info});
+                        enrolls[finger_id].push_back(FeatureData{info});
                         sigfm_free_info(info);
                     }
                 }
@@ -285,7 +296,7 @@ int main(int argc, char* argv[]) {
 
     // Generate random pairs
     std::vector<std::pair<std::string, int>> probe_keys;
-    std::vector<std::string> enroll_keys;
+    std::vector<int> enroll_keys;
     for (const auto& [k, _] : probes) probe_keys.push_back(k);
     for (const auto& [k, _] : enrolls) enroll_keys.push_back(k);
 
@@ -297,8 +308,6 @@ int main(int argc, char* argv[]) {
     std::shuffle(indices.begin(), indices.end(), gen);
 
     indices.resize(num_to_process);
-
-    // match in parallel threads
 
     // Match using std::async
     std::vector<std::pair<bool, int>> matches;
@@ -319,17 +328,17 @@ int main(int argc, char* argv[]) {
 
         if (start >= num_to_process) continue;
 
-        // Capture by value where needed, reference to shared data as const&
-        futures.emplace_back(std::async(std::launch::async, [=, &probe_keys, &enroll_keys, &probes, &enrolls]() {
+        futures.emplace_back(std::async(std::launch::async, [=, &probe_keys, &enroll_keys, &probes, &enrolls, &probe_finger]() {
             std::vector<std::pair<bool, int>> local_matches;
             local_matches.reserve(end - start);
 
             for (size_t i = start; i < end; ++i) {
                 int idx = indices[i];
                 auto& pkey = probe_keys[idx % probe_keys.size()];
-                auto& ekey = enroll_keys[idx / probe_keys.size()];
+                int ekey = enroll_keys[idx / probe_keys.size()];
 
-                bool is_genuine = (pkey.first == ekey);
+                int probe_fid = probe_finger.at(pkey);
+                bool is_genuine = (probe_fid == ekey);
 
                 int max_score = 0;
                 for (const auto& enrolled_feat : enrolls.at(ekey)) {
