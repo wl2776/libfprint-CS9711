@@ -1,0 +1,3 @@
+[submodule "subprojects/openafis"]
+	path = subprojects/openafis
+	url = git@github.com:wl2776/openafis.git

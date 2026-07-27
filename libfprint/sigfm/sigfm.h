@@ -49,6 +49,9 @@ void sigfm_free_info (SigfmImgInfo * info);
 int sigfm_match_score (SigfmImgInfo * frame,
                        SigfmImgInfo * enrolled);
 
+int sigfm_openafis_match_score (SigfmImgInfo * frame,
+                                SigfmImgInfo * enrolled);
+
 /**
  * @brief Serialize an image info for storage
  *

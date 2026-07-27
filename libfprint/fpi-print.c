@@ -298,7 +298,7 @@ fpi_print_sigfm_match (FpPrint * template, FpPrint * print,
   for (int i = 0; i != template->prints->len; ++i)
     {
       SigfmImgInfo * pinfo = g_ptr_array_index (template->prints, i);
-      int score = sigfm_match_score (pinfo, against);
+      int score = sigfm_openafis_match_score (pinfo, against);
       if (score < 0)
         {
           *error = fpi_device_error_new_msg (FP_DEVICE_ERROR_DATA_INVALID,

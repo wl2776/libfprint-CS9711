@@ -10,6 +10,7 @@
 #include "sigfm.h"
 #include "binary.hpp"
 #include "img-info.hpp"
+#include "openafis-bridge.hpp"
 #include "fpi-log.h"
 
 #include "opencv2/core/persistence.hpp"
@@ -33,7 +34,7 @@ template<>
 struct serializer<SigfmImgInfo> : public std::true_type {
     static void serialize(const SigfmImgInfo& info, stream& out)
     {
-        out << info.keypoints << info.descriptors;
+        out << info.width << info.height << info.keypoints << info.descriptors;
     }
 };
 
@@ -42,7 +43,7 @@ struct deserializer<SigfmImgInfo> : public std::true_type {
     static SigfmImgInfo deserialize(stream& in)
     {
         SigfmImgInfo info;
-        in >> info.keypoints >> info.descriptors;
+        in >> info.width >> info.height >> info.keypoints >> info.descriptors;
         return info;
     }
 };
@@ -114,7 +115,7 @@ SigfmImgInfo* sigfm_extract(const SigfmPix* pix, int width, int height)
         cv::Mat descs;
         cv::SIFT::create()->detectAndCompute(img, cv::Mat(), pts, descs);
 
-        auto* info = new SigfmImgInfo{pts, descs};
+        auto* info = new SigfmImgInfo{static_cast<uint16_t>(width), static_cast<uint16_t>(height), pts, descs};
         return info;
     } catch(...) {
         return nullptr;
@@ -203,6 +204,15 @@ int sigfm_match_score(SigfmImgInfo* frame, SigfmImgInfo* enrolled)
         return count;
     }
     catch (...) {
+        return -1;
+    }
+}
+
+int sigfm_openafis_match_score(SigfmImgInfo* frame, SigfmImgInfo* enrolled)
+{
+    try {
+        return sigfm_openafis::match_score(frame, enrolled);
+    } catch (...) {
         return -1;
     }
 }
