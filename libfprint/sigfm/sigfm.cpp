@@ -10,6 +10,7 @@
 #include "sigfm.h"
 #include "binary.hpp"
 #include "img-info.hpp"
+#include "fpi-log.h"
 
 #include "opencv2/core/persistence.hpp"
 #include "opencv2/core/types.hpp"
@@ -139,6 +140,7 @@ int sigfm_match_score(SigfmImgInfo* frame, SigfmImgInfo* enrolled)
             }
         }
         if (nb_matched < min_match) {
+            fp_dbg("nb_matched: %d", nb_matched);
             return 0;
         }
         std::vector<match> matches{matches_unique.begin(),
@@ -175,6 +177,7 @@ int sigfm_match_score(SigfmImgInfo* frame, SigfmImgInfo* enrolled)
         }
 
         if (angles.size() < min_match) {
+            fp_dbg("angles.size() %ld", angles.size());
             return 0;
         }
 
