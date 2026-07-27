@@ -52,6 +52,10 @@ int sigfm_match_score (SigfmImgInfo * frame,
 int sigfm_openafis_match_score (SigfmImgInfo * frame,
                                 SigfmImgInfo * enrolled);
 
+void sigfm_set_dimensions (SigfmImgInfo   * info,
+                           unsigned short   width,
+                           unsigned short   height);
+
 /**
  * @brief Serialize an image info for storage
  *

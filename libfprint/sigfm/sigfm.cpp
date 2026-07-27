@@ -217,4 +217,10 @@ int sigfm_openafis_match_score(SigfmImgInfo* frame, SigfmImgInfo* enrolled)
     }
 }
 
+void sigfm_set_dimensions(SigfmImgInfo* info, unsigned short width, unsigned short height)
+{
+    info->width = width;
+    info->height = height;
+}
+
 void sigfm_free_info(SigfmImgInfo* info) { delete info; }

@@ -295,9 +295,13 @@ fpi_print_sigfm_match (FpPrint * template, FpPrint * print,
       return FPI_MATCH_ERROR;
     }
   SigfmImgInfo * against = g_ptr_array_index (print->prints, 0);
+  if (print->image)
+    sigfm_set_dimensions (against, print->image->width, print->image->height);
   for (int i = 0; i != template->prints->len; ++i)
     {
       SigfmImgInfo * pinfo = g_ptr_array_index (template->prints, i);
+      if (template->image)
+        sigfm_set_dimensions (pinfo, template->image->width, template->image->height);
       int score = sigfm_openafis_match_score (pinfo, against);
       if (score < 0)
         {
