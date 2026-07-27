@@ -34,13 +34,18 @@ public:
     {
         return this->fingerprints()[0];
     }
+
+    bool has_fingerprint() const
+    {
+        return !this->fingerprints().empty();
+    }
 };
 
 OpenAFIS::Fingerprint build_fingerprint_from_minutiae(
     const std::vector<OpenAFIS::Minutia>& minutiae,
     uint16_t img_width, uint16_t img_height)
 {
-    if (minutiae.size() < 2)
+    if (minutiae.size() < 3)
         return OpenAFIS::Fingerprint(0, 0);
 
     if (img_width == 0 || img_height == 0) {
@@ -53,11 +58,14 @@ OpenAFIS::Fingerprint build_fingerprint_from_minutiae(
         if (max_y > 0) img_height = max_y + 1;
     }
 
+    if (img_width == 0 || img_height == 0)
+        return OpenAFIS::Fingerprint(0, 0);
+
     std::vector<std::vector<OpenAFIS::Minutia>> fps;
     fps.push_back(minutiae);
 
     SiftTemplate t(0);
-    if (!t.build({img_width, img_height}, fps)) {
+    if (!t.build({img_width, img_height}, fps) || !t.has_fingerprint()) {
         return OpenAFIS::Fingerprint(0, 0);
     }
     return t.fingerprint();
@@ -80,6 +88,14 @@ static std::vector<cv::KeyPoint> filter_by_response(
 
 int match_score(const SigfmImgInfo* probe, const SigfmImgInfo* candidate)
 {
+    if (!probe || !candidate) {
+        fp_dbg("openafis: null pointer");
+        return 0;
+    }
+    if (probe->keypoints.empty() || candidate->keypoints.empty()) {
+        fp_dbg("openafis: no keypoints");
+        return 0;
+    }
     if (probe->descriptors.empty() || candidate->descriptors.empty()) {
         fp_dbg("openafis: empty descriptors");
         return 0;
@@ -92,8 +108,11 @@ int match_score(const SigfmImgInfo* probe, const SigfmImgInfo* candidate)
     std::vector<cv::DMatch> good_matches;
     for (const auto& m : knn_matches) {
         if (m.size() < 2) continue;
-        if (m[0].distance < 0.8f * m[1].distance)
-            good_matches.push_back(m[0]);
+        if (m[0].distance < 0.8f * m[1].distance) {
+            if (m[0].queryIdx < (int)probe->keypoints.size() &&
+                m[0].trainIdx < (int)candidate->keypoints.size())
+                good_matches.push_back(m[0]);
+        }
     }
     std::sort(good_matches.begin(), good_matches.end(),
         [](const cv::DMatch& a, const cv::DMatch& b) { return a.distance < b.distance; });
