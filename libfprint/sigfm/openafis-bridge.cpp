@@ -96,9 +96,7 @@ int match_score(const SigfmImgInfo* probe, const SigfmImgInfo* candidate)
     for (const auto& m : knn_matches) {
         if (m.size() < 2) continue;
         if (m[0].distance < 0.8f * m[1].distance) {
-            if (m[0].queryIdx < (int)probe->keypoints.size() &&
-                m[0].trainIdx < (int)candidate->keypoints.size())
-                good_matches.push_back(m[0]);
+            good_matches.push_back(m[0]);
         }
     }
     std::sort(good_matches.begin(), good_matches.end(),
