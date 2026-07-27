@@ -342,7 +342,7 @@ int main(int argc, char* argv[]) {
 
                 int max_score = 0;
                 for (const auto& enrolled_feat : enrolls.at(ekey)) {
-                    int score = sigfm_match_score(probes.at(pkey).info, enrolled_feat.info);
+                    int score = sigfm_openafis_match_score(probes.at(pkey).info, enrolled_feat.info);
                     if (score > max_score) max_score = score;
                 }
 
