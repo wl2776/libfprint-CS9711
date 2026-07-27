@@ -9,6 +9,8 @@
 #include <Param.h>
 #include <Template.h>
 
+#include <opencv2/features2d.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -34,54 +36,22 @@ public:
     }
 };
 
-} // namespace
-
-std::vector<OpenAFIS::Minutia> keypoints_to_minutiae(
-    const SigfmImgInfo* info, int max_minutiae)
-{
-    std::vector<cv::KeyPoint> sorted(info->keypoints.begin(), info->keypoints.end());
-    std::sort(sorted.begin(), sorted.end(),
-        [](const cv::KeyPoint& a, const cv::KeyPoint& b) {
-            return a.response > b.response;
-        });
-
-    if (static_cast<int>(sorted.size()) > max_minutiae) {
-        sorted.resize(static_cast<size_t>(max_minutiae));
-    }
-
-    std::vector<OpenAFIS::Minutia> minutiae;
-    minutiae.reserve(sorted.size());
-    for (const auto& kp : sorted) {
-        minutiae.emplace_back(
-            OpenAFIS::Minutia::Type::RidgeEnding,
-            static_cast<uint16_t>(std::lround(kp.pt.x)),
-            static_cast<uint16_t>(std::lround(kp.pt.y)),
-            0);
-    }
-    return minutiae;
-}
-
-static void estimate_dimensions(
-    const std::vector<OpenAFIS::Minutia>& minutiae,
-    uint16_t& width, uint16_t& height)
-{
-    if (width > 0 && height > 0)
-        return;
-
-    uint16_t max_x = 0, max_y = 0;
-    for (const auto& m : minutiae) {
-        if (m.x() > max_x) max_x = m.x();
-        if (m.y() > max_y) max_y = m.y();
-    }
-    if (max_x > 0) width = max_x + 1;
-    if (max_y > 0) height = max_y + 1;
-}
-
 OpenAFIS::Fingerprint build_fingerprint_from_minutiae(
     const std::vector<OpenAFIS::Minutia>& minutiae,
     uint16_t img_width, uint16_t img_height)
 {
-    estimate_dimensions(minutiae, img_width, img_height);
+    if (minutiae.size() < 2)
+        return OpenAFIS::Fingerprint(0, 0);
+
+    if (img_width == 0 || img_height == 0) {
+        uint16_t max_x = 0, max_y = 0;
+        for (const auto& m : minutiae) {
+            if (m.x() > max_x) max_x = m.x();
+            if (m.y() > max_y) max_y = m.y();
+        }
+        if (max_x > 0) img_width = max_x + 1;
+        if (max_y > 0) img_height = max_y + 1;
+    }
 
     std::vector<std::vector<OpenAFIS::Minutia>> fps;
     fps.push_back(minutiae);
@@ -93,32 +63,72 @@ OpenAFIS::Fingerprint build_fingerprint_from_minutiae(
     return t.fingerprint();
 }
 
+static std::vector<cv::KeyPoint> filter_by_response(
+    const std::vector<cv::KeyPoint>& kps, int max_count)
+{
+    std::vector<cv::KeyPoint> sorted(kps.begin(), kps.end());
+    std::sort(sorted.begin(), sorted.end(),
+        [](const cv::KeyPoint& a, const cv::KeyPoint& b) {
+            return a.response > b.response;
+        });
+    if ((int)sorted.size() > max_count)
+        sorted.resize((size_t)max_count);
+    return sorted;
+}
+
+} // namespace
+
 int match_score(const SigfmImgInfo* probe, const SigfmImgInfo* candidate)
 {
-    auto probe_minutiae = keypoints_to_minutiae(probe, 50);
-    auto candidate_minutiae = keypoints_to_minutiae(candidate, 50);
-
-    fp_dbg("openafis: probe keypts=%d minu=%zu, candidate keypts=%d minu=%zu, dims=(%u,%u)/(%u,%u)",
-        (int)probe->keypoints.size(), probe_minutiae.size(),
-        (int)candidate->keypoints.size(), candidate_minutiae.size(),
-        probe->width, probe->height, candidate->width, candidate->height);
-
-    if (probe_minutiae.size() < 2 || candidate_minutiae.size() < 2) {
-        fp_dbg("openafis: too few minutiae, returning 0");
+    if (probe->descriptors.empty() || candidate->descriptors.empty()) {
+        fp_dbg("openafis: empty descriptors");
         return 0;
     }
 
-    auto probe_fp = build_fingerprint_from_minutiae(
-        probe_minutiae, probe->width, probe->height);
-    auto candidate_fp = build_fingerprint_from_minutiae(
-        candidate_minutiae, candidate->width, candidate->height);
+    std::vector<std::vector<cv::DMatch>> knn_matches;
+    auto bfm = cv::BFMatcher::create(cv::NORM_L2);
+    bfm->knnMatch(probe->descriptors, candidate->descriptors, knn_matches, 2);
 
-    fp_dbg("openafis: fp minuCount=%zu/%zu triplets=%zu/%zu",
+    std::vector<cv::DMatch> good_matches;
+    for (const auto& m : knn_matches) {
+        if (m.size() < 2) continue;
+        if (m[0].distance < 0.8f * m[1].distance)
+            good_matches.push_back(m[0]);
+    }
+    std::sort(good_matches.begin(), good_matches.end(),
+        [](const cv::DMatch& a, const cv::DMatch& b) { return a.distance < b.distance; });
+
+    int match_count = (int)good_matches.size();
+    fp_dbg("openafis: descriptor matches=%d (probe kpts=%d, cand kpts=%d)",
+        match_count, (int)probe->keypoints.size(), (int)candidate->keypoints.size());
+
+    if (match_count < 5) {
+        fp_dbg("openafis: too few descriptor matches");
+        return 0;
+    }
+
+    int n = std::min(match_count, 50);
+    std::vector<OpenAFIS::Minutia> probe_minu, candidate_minu;
+    probe_minu.reserve(n);
+    candidate_minu.reserve(n);
+    for (int i = 0; i < n; i++) {
+        const auto& pk = probe->keypoints[good_matches[i].queryIdx];
+        const auto& ck = candidate->keypoints[good_matches[i].trainIdx];
+        probe_minu.emplace_back(OpenAFIS::Minutia::Type::RidgeEnding,
+            (uint16_t)std::lround(pk.pt.x), (uint16_t)std::lround(pk.pt.y), 0);
+        candidate_minu.emplace_back(OpenAFIS::Minutia::Type::RidgeEnding,
+            (uint16_t)std::lround(ck.pt.x), (uint16_t)std::lround(ck.pt.y), 0);
+    }
+
+    auto probe_fp = build_fingerprint_from_minutiae(probe_minu, probe->width, probe->height);
+    auto candidate_fp = build_fingerprint_from_minutiae(candidate_minu, candidate->width, candidate->height);
+
+    fp_dbg("openafis: fp after filter: minu=%zu/%zu triplets=%zu/%zu",
         probe_fp.minutiaeCount(), candidate_fp.minutiaeCount(),
         probe_fp.triplets().size(), candidate_fp.triplets().size());
 
-    if (probe_fp.minutiaeCount() < 2 || candidate_fp.minutiaeCount() < 2) {
-        fp_dbg("openafis: fp too few minutiae, returning 0");
+    if (probe_fp.minutiaeCount() < 3 || candidate_fp.minutiaeCount() < 3) {
+        fp_dbg("openafis: too few fp minutiae for triangulation");
         return 0;
     }
 
@@ -127,11 +137,14 @@ int match_score(const SigfmImgInfo* probe, const SigfmImgInfo* candidate)
     param.MaximumLocalDistance = 50;
     param.MaximumGlobalDistance = 50;
     param.MinimumMinutiae = 2;
-    uint8_t score = 0;
-    match.compute(score, probe_fp, candidate_fp, param);
+    uint8_t geo_score = 0;
+    match.compute(geo_score, probe_fp, candidate_fp, param);
 
-    fp_dbg("openafis: raw score=%d", (int)score);
-    return static_cast<int>(score);
+    fp_dbg("openafis: geo_score=%d, match_count=%d, combined=%d",
+        (int)geo_score, match_count, (geo_score >= 5 ? match_count : 0));
+
+    if (geo_score < 5) return 0;
+    return match_count;
 }
 
 } // namespace sigfm_openafis
