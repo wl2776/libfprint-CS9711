@@ -329,7 +329,10 @@ fp_image_sigfm_extract_thread_func (GTask * task, void * src_obj,
       return;
     }
 
-  if (sigfm_keypoints_count (data->sigfm_info) < 25)
+  int nkpt = sigfm_keypoints_count (data->sigfm_info);
+  fp_dbg ("sigfm detected %d keypoints", nkpt);
+
+  if (nkpt < 25)
     {
       g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                "No enough keypoints found");
