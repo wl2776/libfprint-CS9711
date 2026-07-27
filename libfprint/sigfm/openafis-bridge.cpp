@@ -113,7 +113,7 @@ int match_score(const SigfmImgInfo* probe, const SigfmImgInfo* candidate)
         return 0;
     }
 
-    int n = std::min(match_count, 50);
+    int n = std::min(match_count, 15);
     std::vector<OpenAFIS::Minutia> probe_minu, candidate_minu;
     probe_minu.reserve(n);
     candidate_minu.reserve(n);
